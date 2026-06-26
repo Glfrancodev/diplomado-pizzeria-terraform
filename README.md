@@ -1,6 +1,25 @@
-# Opción B — ECS Fargate + ALB + ECR + Cloud Map + ElastiCache
+# Pizzería Online — Infraestructura (Terraform + AWS)
 
-Despliegue de los 2 microservicios, broker NATS y caché Redis en **AWS Fargate + ElastiCache** usando Terraform.
+Infraestructura como código (IaC) de la **Pizzería Online** (Grupo 2): 3 microservicios
+NestJS comunicados por **NATS**, corriendo en **ECS Fargate**, con base de datos
+**DynamoDB** y acceso por **mínimo privilegio** vía IAM. Todo con Terraform.
+
+> Este repo es **solo la infraestructura**. El código de los microservicios vive en el
+> repo del backend. Acá se crean los "envases vacíos" (red, cluster, tablas, repos de
+> imagen); el backend se conecta a ellos cuando se suben las imágenes Docker a ECR.
+
+## Microservicios
+
+| Servicio | Rol | Tráfico | Tabla(s) DynamoDB (RW) |
+|---|---|---|---|
+| **orders**   | API HTTP detrás del ALB (única puerta pública). CRUD de pedidos. | HTTP :3000 | `pizzeria-pedidos` |
+| **kitchen**  | Worker NATS. Valida stock, simula preparación. | solo NATS | `pizzeria-productos`, `pizzeria-ingredientes` |
+| **delivery** | Worker NATS. Asigna repartidor. | solo NATS | `pizzeria-repartidores` |
+
+**Modelo database-per-service ESTRICTO:** cada servicio accede SOLO a sus tablas. Si
+necesita datos de otro dominio, los pide por NATS (no toca la tabla ajena). Esto se
+fuerza con un **task role de IAM por servicio**, cada uno scopeado al ARN exacto de sus
+tablas.
 
 ## Arquitectura desplegada
 
@@ -15,174 +34,148 @@ Despliegue de los 2 microservicios, broker NATS y caché Redis en **AWS Fargate 
                                │ :3000
                                ▼
    ┌─────────────────────────────────────────────────────────┐
-   │                  VPC 10.0.0.0/16                        │
-   │                                                         │
-   │  Subnet pública AZ-a            Subnet pública AZ-b     │
-   │  ┌──────────────┐               ┌──────────────┐        │
-   │  │ orders task  │               │ orders task  │        │
-   │  │ (Fargate)    │               │ (Fargate)    │        │
-   │  └──┬───────┬───┘               └──┬───────┬───┘        │
-   │     │       │                      │       │            │
-   │     │       └─────────┬────────────┘       │            │
-   │     │                 ▼                    │            │
-   │     │       ┌───────────────────┐          │            │
-   │     │       │ ElastiCache Redis │ ◄────────┘            │
-   │     │       │ (cache.t3.micro)  │   persistencia órdenes│
-   │     │       └───────────────────┘                       │
-   │     │                                                   │
-   │     └────────────┐                                      │
-   │                  ▼                                      │
-   │       ┌───────────────┐                                 │
-   │       │   NATS task   │   ← descubierta vía             │
-   │       │   (Fargate)   │     nats.app.internal           │
-   │       └───────▲───────┘                                 │
-   │               │                                         │
-   │       ┌───────┴────────┐                                │
-   │       │ notifications  │                                │
-   │       │   (Fargate)    │                                │
-   │       └────────────────┘                                │
-   └─────────────────────────────────────────────────────────┘
-                            │
-                            └──► CloudWatch Logs
-                            └──► ECR (orders, notifications)
-                            └──► Cloud Map (DNS interno)
+   │                  VPC 10.0.0.0/16                          │
+   │   Subnet pública AZ-a            Subnet pública AZ-b      │
+   │                                                           │
+   │      ┌──────────────┐                                     │
+   │      │ orders task  │──┐  (HTTP detrás del ALB)           │
+   │      └──────────────┘  │                                  │
+   │      ┌──────────────┐  │                                  │
+   │      │ kitchen task │──┼──► NATS (nats.app.internal:4222) │
+   │      └──────────────┘  │         ▲                        │
+   │      ┌──────────────┐  │         │                        │
+   │      │ delivery task│──┘         │                        │
+   │      └──────┬───────┘     ┌──────┴───────┐                │
+   │             │             │  NATS task   │                │
+   │             │             │  (Fargate)   │                │
+   │             │             └──────────────┘                │
+   └─────────────┼─────────────────────────────────────────────┘
+                 │ (SDK AWS + IAM, NO por la VPC)
+                 ▼
+        ┌────────────────────────────────────┐
+        │  DynamoDB (serverless, fuera de la  │
+        │  VPC):  4 tablas PAY_PER_REQUEST    │
+        └────────────────────────────────────┘
+                 │
+                 └──► CloudWatch Logs · ECR (orders/kitchen/delivery) · Cloud Map
 ```
+
+> **DynamoDB NO vive dentro de la VPC** y NO usa Security Group: se alcanza con el SDK de
+> AWS (región + nombre de tabla) y se protege con **IAM** (permisos), no con firewall de
+> red. Ese es el cambio de modelo clave respecto a una caché tipo ElastiCache.
 
 ## Recursos creados (por archivo)
 
 | Archivo | Recursos AWS |
 |---|---|
-| `providers.tf`        | Provider AWS (~> 5.60), tags por defecto (`Project`, `ManagedBy`, `Course`) |
-| `variables.tf`        | 13 variables (región, CIDRs, AZs, `task_cpu`, `task_memory`, `redis_node_type`, `image_tag`, etc.) |
-| `network.tf`          | VPC `10.0.0.0/16`, 2 subnets públicas (`10.0.1.0/24`, `10.0.2.0/24`), IGW, route table |
-| `security_groups.tf`  | 5 SGs encadenados (ALB → orders → nats/redis ← notifications) |
-| `ecr.tf`              | 2 repositorios ECR (`test-nest/orders`, `test-nest/notifications`) + lifecycle policy (máx 10 imágenes) |
-| `iam.tf`              | Rol de ejecución de tareas (`AmazonECSTaskExecutionRolePolicy`) |
-| `service_discovery.tf`| Namespace privado `app.internal` + 3 servicios Cloud Map (nats / orders / notifications) |
-| `alb.tf`              | ALB, target group `ip:3000`, listener HTTP:80, health check `/orders/status/healthcheck` (matcher `200-404`) |
-| `elasticache.tf`      | Subnet group + nodo ElastiCache Redis 7.1 (`cache.t3.micro`) |
-| `logs.tf`             | 3 log groups CloudWatch (`/ecs/test-nest/{nats,orders,notifications}`, retención 7 días) |
-| `ecs.tf`              | Cluster `test-nest-cluster`, 3 task definitions (Fargate 0.25 vCPU / 0.5 GB), 3 services |
-| `outputs.tf`          | DNS del ALB, URLs de ECR, comando de login a ECR, nombre del cluster, namespace de Cloud Map, endpoint Redis |
+| `1-providers.tf`        | Provider AWS (~> 5.60), tags por defecto (`Project`, `ManagedBy`, `Course`) |
+| `2-variables.tf`        | Variables (región, CIDRs, AZs, `task_cpu/memory`, `*_desired_count`, `image_tag`); `project_name = "pizzeria"` |
+| `3-network.tf`          | VPC `10.0.0.0/16`, 2 subnets públicas (`10.0.1.0/24`, `10.0.2.0/24`), IGW, route table |
+| `4-security_groups.tf`  | SGs: ALB → orders; kitchen y delivery (workers, sin ingress); NATS (acepta orders/kitchen/delivery en :4222) |
+| `5-ecr.tf`              | 3 repos ECR (`pizzeria/orders`, `pizzeria/kitchen`, `pizzeria/delivery`) + lifecycle (máx 10 imágenes) |
+| `6-iam.tf`              | Execution role + **3 task roles** con políticas DynamoDB scoped (mínimo privilegio) |
+| `7-logs.tf`             | 4 log groups CloudWatch (`/ecs/pizzeria/{nats,orders,kitchen,delivery}`, retención 7 días) |
+| `8-service_discovery.tf`| Namespace privado `app.internal` + 4 servicios Cloud Map (nats/orders/kitchen/delivery) |
+| `9-alb.tf`              | ALB, target group `ip:3000`, listener HTTP:80, health check `/orders/status/healthcheck` (matcher `200-404`) |
+| `10-dynamodb.tf`        | **4 tablas DynamoDB** `PAY_PER_REQUEST` (pedidos, productos, ingredientes, repartidores) |
+| `11-ecs.tf`             | Cluster, 4 task definitions (NATS + 3 servicios, Fargate 0.25 vCPU / 0.5 GB), 4 services |
+| `12-outputs.tf`         | DNS del ALB, nombres de las tablas, URLs de ECR, login command, cluster, namespace |
 
 ## Prerrequisitos
 
 - **Terraform ≥ 1.6**
-- **AWS CLI** configurada (`aws configure`) con permisos suficientes
-- **Docker** local para construir y empujar imágenes
-- Cuenta AWS con límites Fargate disponibles en la región elegida
+- **AWS CLI** configurada (`aws configure`) — las credenciales NUNCA van en el repo
+- **Docker** local para construir y subir imágenes
+- Cuenta AWS con límites de Fargate disponibles en la región (`us-east-1`)
 
-> Si querés evitar el flujo manual, desde la raíz del repo podés correr `./deploy.sh` (o `make deploy`), que orquesta los pasos 1 a 3 automáticamente.
-
-## Flujo de despliegue (paso a paso)
+## Flujo de despliegue
 
 ### 1. Crear la infraestructura
 
 ```bash
-cd terraform/option-b-ecs
-terraform init
-terraform plan
-terraform apply
+terraform init      # descarga el provider de AWS (una vez)
+terraform validate  # chequea sintaxis (no toca AWS)
+terraform plan      # muestra qué se va a crear (se conecta a AWS, no crea nada)
+terraform apply     # crea todo de verdad (pide "yes")
 ```
 
-Al terminar verás los **7 outputs** definidos en `outputs.tf`:
+Al terminar verás los outputs (DNS del ALB, URLs de ECR, nombres de tablas, etc.).
 
-```
-alb_dns_name                       = "test-nest-alb-123456.us-east-1.elb.amazonaws.com"
-cluster_name                       = "test-nest-cluster"
-ecr_orders_repository_url          = "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-nest/orders"
-ecr_notifications_repository_url   = "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-nest/notifications"
-ecr_login_command                  = "aws ecr get-login-password --region us-east-1 | docker login ..."
-service_discovery_namespace        = "app.internal"
-redis_endpoint                     = "test-nest-redis.abc123.0001.use1.cache.amazonaws.com:6379"
-```
-
-> En este punto los servicios `orders` y `notifications` arrancan pero **fallan**, porque todavía no hay imágenes en ECR. Es esperable.
->
-> ElastiCache puede tardar **5-10 minutos** en estar disponible. Terraform espera; tené paciencia con el primer apply.
+> En este punto los servicios `orders`, `kitchen` y `delivery` arrancan pero **fallan**,
+> porque todavía no hay imágenes en ECR. Es esperable: la infra y las imágenes son cosas
+> separadas.
 
 ### 2. Construir y subir las imágenes
 
-Desde la raíz del repo. **`--platform linux/amd64` es obligatorio** si construís desde un Mac M1/M2 o un Windows ARM: Fargate corre x86_64.
+`--platform linux/amd64` es **obligatorio** si construís desde Mac M1/M2 o Windows ARM
+(Fargate corre x86_64).
 
 ```bash
 # Login a ECR (copiá el comando del output `ecr_login_command`)
 aws ecr get-login-password --region us-east-1 \
   | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
 
-# Build + tag + push de orders
-docker build --platform linux/amd64 -f apps/orders/Dockerfile \
-  -t <ecr_orders_repository_url>:latest .
+# Por cada servicio: build + push (ejemplo orders; repetir kitchen y delivery)
+docker build --platform linux/amd64 -f apps/orders/Dockerfile -t <ecr_orders_repository_url>:latest .
 docker push <ecr_orders_repository_url>:latest
-
-# Build + tag + push de notifications
-docker build --platform linux/amd64 -f apps/notifications/Dockerfile \
-  -t <ecr_notifications_repository_url>:latest .
-docker push <ecr_notifications_repository_url>:latest
 ```
 
 ### 3. Forzar redeploy de los servicios ECS
 
 ```bash
-aws ecs update-service --cluster test-nest-cluster --service orders        --force-new-deployment
-aws ecs update-service --cluster test-nest-cluster --service notifications --force-new-deployment
+aws ecs update-service --cluster pizzeria-cluster --service orders   --force-new-deployment
+aws ecs update-service --cluster pizzeria-cluster --service kitchen  --force-new-deployment
+aws ecs update-service --cluster pizzeria-cluster --service delivery --force-new-deployment
 ```
 
-### 4. Probar end-to-end
+### 4. Probar y ver logs
 
 ```bash
-# Crear una orden: orders la guarda en Redis y publica order.created en NATS
-curl -X POST http://<alb_dns_name>/orders \
-  -H "Content-Type: application/json" \
-  -d '{"customer":"ana","total":120}'
-# → respuesta incluye orderId
+curl http://<alb_dns_name>/...          # endpoint HTTP de orders (según tu API)
 
-# Leer la orden desde Redis
-curl http://<alb_dns_name>/orders/<orderId>
-
-# Consultar estado de notificaciones (request/response a notifications)
-curl http://<alb_dns_name>/orders/status/ana
+aws logs tail /ecs/pizzeria/orders   --follow
+aws logs tail /ecs/pizzeria/kitchen  --follow
+aws logs tail /ecs/pizzeria/delivery --follow
+aws logs tail /ecs/pizzeria/nats     --follow
 ```
 
-### 5. Ver logs
+## Limpieza (¡importante para no pagar de más!)
 
 ```bash
-aws logs tail /ecs/test-nest/orders        --follow
-aws logs tail /ecs/test-nest/notifications --follow
-aws logs tail /ecs/test-nest/nats          --follow
+terraform destroy   # demuele TODO. Pide "yes".
 ```
 
-## Limpieza
-
-```bash
-terraform destroy
-```
-
-> ⚠️ ECR no elimina repos con imágenes. Si `destroy` falla en los repositorios, agregale `force_delete = true` en `ecr.tf` o vaciá las imágenes antes.
->
-> ElastiCache también tarda algunos minutos en destruirse.
+> Los repos ECR tienen `force_delete = true`, así que `destroy` los borra aunque tengan
+> imágenes. DynamoDB se borra al instante (no hay nodo que apagar como en ElastiCache).
 
 ## Estimación de costo (us-east-1, ~24/7)
 
-| Recurso              | Cantidad | Costo aprox. mensual |
-|----------------------|----------|----------------------|
-| Fargate (0.25 vCPU + 0.5 GB) | 3 tareas (nats + orders + notifications) | ~$22 |
-| ALB                  | 1        | ~$17 |
-| ElastiCache (cache.t3.micro) | 1 nodo | ~$12 |
-| Almacenamiento ECR   | <1 GB    | ~$0.10 |
-| CloudWatch Logs      | bajo volumen (retención 7 días) | ~$0.50 |
-| **Total**            |          | **~$52/mes** |
+| Recurso | Cantidad | Costo aprox. mensual |
+|---|---|---|
+| Fargate (0.25 vCPU + 0.5 GB) | 4 tareas (nats + 3 servicios) | ~$29 |
+| ALB | 1 | ~$17 |
+| **DynamoDB** (PAY_PER_REQUEST) | 4 tablas | **~$0** en uso de clase (pagás por request) |
+| ECR | <1 GB | ~$0.10 |
+| CloudWatch Logs | bajo volumen (7 días) | ~$0.50 |
+| **Total** | | **~$47/mes** |
 
-Para una clase: levantar antes de la demo y `terraform destroy` al terminar = unos centavos.
+Para una clase: levantar antes de la demo y `terraform destroy` al terminar = unos
+centavos. Elegir DynamoDB en vez de ElastiCache ahorra el nodo fijo (~$12/mes) y suma
+alta disponibilidad Multi-AZ gratis.
 
-## Conceptos clave a discutir en clase
+## Conceptos clave (para la defensa)
 
-1. **`awsvpc` network mode**: cada tarea Fargate recibe su propia ENI con IP. Por eso los target groups del ALB son `type = "ip"`, no `instance`.
-2. **Cloud Map vs ALB interno**: para tráfico este-oeste entre microservicios usamos DNS (más barato). El ALB es solo para tráfico norte-sur (internet → orders).
-3. **Servicios administrados vs auto-gestionados**: NATS lo corremos en Fargate (nos lo administramos nosotros). Redis lo usamos vía ElastiCache (lo administra AWS: parches, backups, monitoring). Mostrar el trade-off costo/responsabilidad.
-4. **Encadenamiento de SGs**: en vez de listas de CIDRs, las reglas referencian otros SGs (`referenced_security_group_id`). Si las IPs cambian, la regla se sigue cumpliendo.
-5. **Roles separados**: `task_execution_role` (lo usa la plataforma ECS) vs `task_role` (lo usa la app dentro del container). Acá solo necesitamos el primero.
-6. **Trade-off costo/seguridad**: pusimos tareas en subnets públicas para evitar el costo de NAT Gateway. ElastiCache no recibe IP pública aunque la subnet sea pública, así que queda solo accesible desde dentro de la VPC.
-7. **State remoto**: el `backend "s3"` está comentado en `providers.tf`. Discutir por qué es crítico en equipos (locking, no perder el state, no commitear secretos).
-8. **Health check pragmático**: la ruta `/orders/status/healthcheck` no existe explícitamente en `orders.controller.ts`, pero cae dentro de `@Get('status/:customer')`, que responde 200. El matcher `200-404` también tolera la versión "no existe". Comparar con un endpoint dedicado `/healthz` que devuelva el estado de las dependencias (Redis, NATS).
-9. **Imagen para Fargate**: Fargate corre x86_64, por eso los `docker build` usan `--platform linux/amd64`. Sin esa flag, en Apple Silicon la imagen sale ARM y la tarea falla con `exec format error`.
+1. **DynamoDB vs ElastiCache:** DynamoDB es serverless, vive FUERA de la VPC y se protege
+   con IAM; ElastiCache es un nodo dentro de la VPC protegido con Security Group.
+2. **Mínimo privilegio (IAM):** `execution_role` (común, para arrancar tareas) vs
+   `task_role` (uno por servicio, scopeado al ARN de sus tablas). orders no puede tocar
+   la tabla de kitchen aunque quiera.
+3. **database-per-service:** cada servicio dueño de sus tablas; lo ajeno se pide por NATS.
+4. **`awsvpc` network mode:** cada tarea Fargate tiene su propia IP → los target groups
+   del ALB son `type = "ip"`, no `instance`.
+5. **Cloud Map vs ALB:** tráfico este-oeste entre microservicios por DNS interno
+   (`nats.app.internal`); el ALB es solo para tráfico norte-sur (internet → orders).
+6. **Encadenamiento de SGs:** las reglas referencian otros SGs, no listas de IPs.
+7. **Costo/seguridad:** tareas en subnets públicas para evitar el costo de un NAT Gateway.
+8. **State remoto (extra):** el `backend "s3"` para compartir el state en equipo con
+   locking — pendiente como punto extra.
