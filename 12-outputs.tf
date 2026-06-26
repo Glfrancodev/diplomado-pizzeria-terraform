@@ -20,10 +20,14 @@ output "ecr_orders_repository_url" {
   value       = aws_ecr_repository.orders.repository_url
 }
 
-output "ecr_notifications_repository_url" {
-  description = "URL del repo ECR para notifications."
-  value       = aws_ecr_repository.notifications.repository_url
-  # 🔧 RENOMBRAR a kitchen y AGREGAR el output de delivery.
+output "ecr_kitchen_repository_url" {
+  description = "URL del repo ECR para kitchen."
+  value       = aws_ecr_repository.kitchen.repository_url
+}
+
+output "ecr_delivery_repository_url" {
+  description = "URL del repo ECR para delivery."
+  value       = aws_ecr_repository.delivery.repository_url
 }
 
 # --- Comando listo para copiar/pegar y loguear Docker contra ECR ---

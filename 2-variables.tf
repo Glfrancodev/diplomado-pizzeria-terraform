@@ -64,12 +64,16 @@ variable "orders_desired_count" {
   default     = 1 # ✅ 1 alcanza para la demo. Subilo para alta disponibilidad.
 }
 
-variable "notifications_desired_count" {
-  description = "Número de tareas Fargate para notifications."
+variable "kitchen_desired_count" {
+  description = "Número de tareas Fargate para kitchen (worker NATS)."
   type        = number
   default     = 1
-  # 🔧 OJO: vas a renombrar 'notifications' a 'kitchen' y agregar 'delivery'.
-  #         Acá necesitarás: kitchen_desired_count y delivery_desired_count.
+}
+
+variable "delivery_desired_count" {
+  description = "Número de tareas Fargate para delivery (worker NATS)."
+  type        = number
+  default     = 1
 }
 
 # --- Tamaño de cada contenedor ---

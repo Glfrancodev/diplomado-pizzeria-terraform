@@ -9,12 +9,10 @@
 #  ¿LO CAMBIO? SÍ, BASTANTE. Acá aplicás "mínimo privilegio" a TU flujo.
 #  Es uno de los archivos que más se evalúa en el rubric.
 #
-#  CADENA EN LA REFERENCIA:  internet → ALB → orders → {nats, redis}
-#                                                       notifications → nats
 #  CADENA EN TU PROYECTO:    internet → ALB → orders → nats
 #                                              kitchen  → nats
 #                                              delivery → nats
-#                            (Redis se va; DynamoDB NO usa SG, usa IAM)
+#                            (DynamoDB NO usa SG, usa IAM)
 # =====================================================================
 
 # --- SG del ALB: deja entrar internet por el puerto 80 ---
@@ -67,11 +65,10 @@ resource "aws_security_group" "orders" {
   tags = { Name = "${var.project_name}-orders-sg" }
 }
 
-# --- SG de notifications: NO acepta nada entrante (es worker NATS puro) ---
-# 🔧 RENOMBRAR a "kitchen". Tu kitchen es igual: sin ingress, solo egress.
-resource "aws_security_group" "notifications" {
-  name        = "${var.project_name}-notifications-sg"
-  description = "notifications no acepta entrante (microservicio NATS puro)"
+# --- SG de kitchen: NO acepta nada entrante (es worker NATS puro) ---
+resource "aws_security_group" "kitchen" {
+  name        = "${var.project_name}-kitchen-sg"
+  description = "kitchen no acepta entrante (microservicio NATS puro)"
   vpc_id      = aws_vpc.main.id
 
   # (no hay ingress = nadie puede iniciarle conexión. Perfecto para un worker.)
@@ -82,16 +79,29 @@ resource "aws_security_group" "notifications" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "${var.project_name}-notifications-sg" }
+  tags = { Name = "${var.project_name}-kitchen-sg" }
 }
 
-# 🔧 AGREGAR: un SG idéntico a este para "delivery" (tu 3er servicio).
-#    Copiá este bloque, cambiá "notifications" por "delivery".
+# --- SG de delivery: igual que kitchen, worker NATS puro sin ingress ---
+resource "aws_security_group" "delivery" {
+  name        = "${var.project_name}-delivery-sg"
+  description = "delivery no acepta entrante (microservicio NATS puro)"
+  vpc_id      = aws_vpc.main.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project_name}-delivery-sg" }
+}
 
 # --- SG de NATS: el broker. Solo deja entrar a los servicios, nunca a internet ---
 resource "aws_security_group" "nats" {
   name        = "${var.project_name}-nats-sg"
-  description = "Broker NATS: ingreso solo desde orders y notifications"
+  description = "Broker NATS: ingreso solo desde orders, kitchen y delivery"
   vpc_id      = aws_vpc.main.id
 
   egress {
@@ -116,15 +126,22 @@ resource "aws_vpc_security_group_ingress_rule" "nats_from_orders" {
   description                  = "NATS desde orders"
 }
 
-resource "aws_vpc_security_group_ingress_rule" "nats_from_notifications" {
+resource "aws_vpc_security_group_ingress_rule" "nats_from_kitchen" {
   security_group_id            = aws_security_group.nats.id
-  referenced_security_group_id = aws_security_group.notifications.id
+  referenced_security_group_id = aws_security_group.kitchen.id
   ip_protocol                  = "tcp"
   from_port                    = 4222
   to_port                      = 4222
-  description                  = "NATS desde notifications"
-  # 🔧 RENOMBRAR a kitchen, y AGREGAR una regla igual "nats_from_delivery".
-  #    NATS debe aceptar a los 3: orders, kitchen y delivery.
+  description                  = "NATS desde kitchen"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "nats_from_delivery" {
+  security_group_id            = aws_security_group.nats.id
+  referenced_security_group_id = aws_security_group.delivery.id
+  ip_protocol                  = "tcp"
+  from_port                    = 4222
+  to_port                      = 4222
+  description                  = "NATS desde delivery"
 }
 
 # NOTA: aquí estaban el SG de Redis y su regla de ingreso (puerto 6379).

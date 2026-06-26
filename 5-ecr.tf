@@ -20,11 +20,20 @@ resource "aws_ecr_repository" "orders" {
   }
 }
 
-# --- Repo para la imagen de notifications ---
-# 🔧 RENOMBRAR a "kitchen" y AGREGAR un tercer repo para "delivery"
-#    (copiá este bloque y cambiá el nombre).
-resource "aws_ecr_repository" "notifications" {
-  name                 = "${var.project_name}/notifications"
+# --- Repo para la imagen de kitchen ---
+resource "aws_ecr_repository" "kitchen" {
+  name                 = "${var.project_name}/kitchen"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+# --- Repo para la imagen de delivery ---
+resource "aws_ecr_repository" "delivery" {
+  name                 = "${var.project_name}/delivery"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 
@@ -56,8 +65,12 @@ resource "aws_ecr_lifecycle_policy" "orders" {
   policy     = local.ecr_lifecycle_policy
 }
 
-resource "aws_ecr_lifecycle_policy" "notifications" {
-  repository = aws_ecr_repository.notifications.name
+resource "aws_ecr_lifecycle_policy" "kitchen" {
+  repository = aws_ecr_repository.kitchen.name
   policy     = local.ecr_lifecycle_policy
-  # 🔧 AGREGAR una política igual para el repo de delivery.
+}
+
+resource "aws_ecr_lifecycle_policy" "delivery" {
+  repository = aws_ecr_repository.delivery.name
+  policy     = local.ecr_lifecycle_policy
 }

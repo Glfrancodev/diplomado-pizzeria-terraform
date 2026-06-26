@@ -20,15 +20,14 @@ resource "aws_cloudwatch_log_group" "orders" {
   retention_in_days = 7
 }
 
-# --- Diario de notifications ---
-# 🔧 RENOMBRAR a "kitchen" y AGREGAR un tercer log group para "delivery".
-resource "aws_cloudwatch_log_group" "notifications" {
-  name              = "/ecs/${var.project_name}/notifications"
+# --- Diario de kitchen ---
+resource "aws_cloudwatch_log_group" "kitchen" {
+  name              = "/ecs/${var.project_name}/kitchen"
   retention_in_days = 7
 }
 
-# 🔧 AGREGAR:
-# resource "aws_cloudwatch_log_group" "delivery" {
-#   name              = "/ecs/${var.project_name}/delivery"
-#   retention_in_days = 7
-# }
+# --- Diario de delivery ---
+resource "aws_cloudwatch_log_group" "delivery" {
+  name              = "/ecs/${var.project_name}/delivery"
+  retention_in_days = 7
+}

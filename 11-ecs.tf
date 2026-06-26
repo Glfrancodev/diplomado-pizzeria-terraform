@@ -30,8 +30,9 @@ data "aws_caller_identity" "current" {} # averigua tu account_id de AWS
 locals {
   account_id          = data.aws_caller_identity.current.account_id
   ecr_registry        = "${local.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com"
-  orders_image        = "${aws_ecr_repository.orders.repository_url}:${var.image_tag}"
-  notifications_image = "${aws_ecr_repository.notifications.repository_url}:${var.image_tag}"
+  orders_image   = "${aws_ecr_repository.orders.repository_url}:${var.image_tag}"
+  kitchen_image  = "${aws_ecr_repository.kitchen.repository_url}:${var.image_tag}"
+  delivery_image = "${aws_ecr_repository.delivery.repository_url}:${var.image_tag}"
 
   # URL interna de NATS, vía Cloud Map (nombre, NO IP). 🔧 esto se queda igual.
   nats_dns_url = "nats://nats.${aws_service_discovery_private_dns_namespace.main.name}:4222"
@@ -109,13 +110,11 @@ resource "aws_ecs_task_definition" "orders" {
   }])
 }
 
-# --- Task definition de notifications ---
-# 🔧 RENOMBRAR a "kitchen" y CREAR otra igual para "delivery".
-#    kitchen necesita su task_role (RW ingredientes, R productos) y las
-#    variables TABLE_INGREDIENTES / TABLE_PRODUCTOS. delivery, su task_role
-#    (RW repartidores) y TABLE_REPARTIDORES. Workers NATS: sin portMappings.
-resource "aws_ecs_task_definition" "notifications" {
-  family                   = "${var.project_name}-notifications"
+# --- Task definition de kitchen (worker NATS) ---
+# kitchen es dueño de productos e ingredientes. El task_role con permisos
+# DynamoDB se asigna en el siguiente paso (requisito #2).
+resource "aws_ecs_task_definition" "kitchen" {
+  family                   = "${var.project_name}-kitchen"
   cpu                      = var.task_cpu
   memory                   = var.task_memory
   network_mode             = "awsvpc"
@@ -123,19 +122,52 @@ resource "aws_ecs_task_definition" "notifications" {
   execution_role_arn       = aws_iam_role.task_execution.arn
 
   container_definitions = jsonencode([{
-    name      = "notifications"
-    image     = local.notifications_image
+    name      = "kitchen"
+    image     = local.kitchen_image
     essential = true
     # (sin portMappings: es un worker, nadie le hace requests HTTP)
     environment = [
-      { name = "NATS_URL", value = local.nats_dns_url }
+      { name = "NATS_URL", value = local.nats_dns_url },
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "TABLE_PRODUCTOS", value = aws_dynamodb_table.productos.name },
+      { name = "TABLE_INGREDIENTES", value = aws_dynamodb_table.ingredientes.name }
     ]
     logConfiguration = {
       logDriver = "awslogs"
       options = {
-        awslogs-group         = aws_cloudwatch_log_group.notifications.name
+        awslogs-group         = aws_cloudwatch_log_group.kitchen.name
         awslogs-region        = var.aws_region
-        awslogs-stream-prefix = "notifications"
+        awslogs-stream-prefix = "kitchen"
+      }
+    }
+  }])
+}
+
+# --- Task definition de delivery (worker NATS) ---
+# delivery es dueño de repartidores. Su task_role se asigna en el requisito #2.
+resource "aws_ecs_task_definition" "delivery" {
+  family                   = "${var.project_name}-delivery"
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = aws_iam_role.task_execution.arn
+
+  container_definitions = jsonencode([{
+    name      = "delivery"
+    image     = local.delivery_image
+    essential = true
+    environment = [
+      { name = "NATS_URL", value = local.nats_dns_url },
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "TABLE_REPARTIDORES", value = aws_dynamodb_table.repartidores.name }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.delivery.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "delivery"
       }
     }
   }])
@@ -189,24 +221,40 @@ resource "aws_ecs_service" "orders" {
   depends_on = [aws_lb_listener.http] # esperá a que el listener exista
 }
 
-# --- Service de notifications ---
-# 🔧 RENOMBRAR a "kitchen" y CREAR otro igual para "delivery".
-#    Workers: SIN bloque load_balancer (no van detrás del ALB). Usan su
-#    propio security group (kitchen-sg / delivery-sg) y su entrada Cloud Map.
-resource "aws_ecs_service" "notifications" {
-  name            = "notifications"
+# --- Service de kitchen (worker: SIN load_balancer, no va detrás del ALB) ---
+resource "aws_ecs_service" "kitchen" {
+  name            = "kitchen"
   cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.notifications.arn
-  desired_count   = var.notifications_desired_count
+  task_definition = aws_ecs_task_definition.kitchen.arn
+  desired_count   = var.kitchen_desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
     subnets          = aws_subnet.public[*].id
-    security_groups  = [aws_security_group.notifications.id]
+    security_groups  = [aws_security_group.kitchen.id]
     assign_public_ip = true
   }
 
   service_registries {
-    registry_arn = aws_service_discovery_service.notifications.arn
+    registry_arn = aws_service_discovery_service.kitchen.arn
+  }
+}
+
+# --- Service de delivery (worker: SIN load_balancer) ---
+resource "aws_ecs_service" "delivery" {
+  name            = "delivery"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.delivery.arn
+  desired_count   = var.delivery_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.delivery.id]
+    assign_public_ip = true
+  }
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.delivery.arn
   }
 }

@@ -55,10 +55,27 @@ resource "aws_service_discovery_service" "orders" {
   }
 }
 
-# --- Entrada para notifications → notifications.app.internal ---
-# 🔧 RENOMBRAR a "kitchen" y AGREGAR una entrada igual para "delivery".
-resource "aws_service_discovery_service" "notifications" {
-  name = "notifications"
+# --- Entrada para kitchen → kitchen.app.internal ---
+resource "aws_service_discovery_service" "kitchen" {
+  name = "kitchen"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+    routing_policy = "MULTIVALUE"
+  }
+
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
+
+# --- Entrada para delivery → delivery.app.internal ---
+resource "aws_service_discovery_service" "delivery" {
+  name = "delivery"
 
   dns_config {
     namespace_id = aws_service_discovery_private_dns_namespace.main.id
