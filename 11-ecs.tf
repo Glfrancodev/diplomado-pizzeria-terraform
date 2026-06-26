@@ -79,9 +79,8 @@ resource "aws_ecs_task_definition" "orders" {
   memory                   = var.task_memory
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = aws_iam_role.task_execution.arn
-  # 🔧 AGREGAR: task_role_arn = aws_iam_role.orders_task.arn
-  #    (el carnet con permisos de DynamoDB que definís en iam.tf)
+  execution_role_arn       = aws_iam_role.task_execution.arn      # arrancar la tarea
+  task_role_arn            = aws_iam_role.orders_task.arn         # permisos DynamoDB (pedidos)
 
   container_definitions = jsonencode([{
     name      = "orders"
@@ -119,7 +118,8 @@ resource "aws_ecs_task_definition" "kitchen" {
   memory                   = var.task_memory
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = aws_iam_role.task_execution.arn
+  execution_role_arn       = aws_iam_role.task_execution.arn      # arrancar la tarea
+  task_role_arn            = aws_iam_role.kitchen_task.arn        # permisos DynamoDB (productos + ingredientes)
 
   container_definitions = jsonencode([{
     name      = "kitchen"
@@ -151,7 +151,8 @@ resource "aws_ecs_task_definition" "delivery" {
   memory                   = var.task_memory
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = aws_iam_role.task_execution.arn
+  execution_role_arn       = aws_iam_role.task_execution.arn      # arrancar la tarea
+  task_role_arn            = aws_iam_role.delivery_task.arn       # permisos DynamoDB (repartidores)
 
   container_definitions = jsonencode([{
     name      = "delivery"

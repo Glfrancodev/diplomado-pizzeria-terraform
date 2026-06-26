@@ -41,38 +41,87 @@ resource "aws_iam_role_policy_attachment" "task_execution_managed" {
 }
 
 # =====================================================================
-#  🔧 LO QUE DEBÉS AGREGAR PARA TU PROYECTO (DynamoDB) — esquema:
+#  TASK ROLES (uno por servicio) — DynamoDB con MÍNIMO PRIVILEGIO
 # ---------------------------------------------------------------------
-#  Por cada servicio que toca DynamoDB, creás un TASK ROLE + una política
-#  que le da acceso SOLO a sus tablas (mínimo privilegio). Ejemplo orders:
-#
-#  resource "aws_iam_role" "orders_task" {
-#    name               = "${var.project_name}-orders-task"
-#    assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
-#  }
-#
-#  resource "aws_iam_role_policy" "orders_dynamo" {
-#    role = aws_iam_role.orders_task.id
-#    policy = jsonencode({
-#      Version = "2012-10-17"
-#      Statement = [
-#        { # pedidos y productos: lectura + escritura (orders es dueño)
-#          Effect   = "Allow"
-#          Action   = ["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem",
-#                      "dynamodb:DeleteItem","dynamodb:Query","dynamodb:Scan"]
-#          Resource = [aws_dynamodb_table.pedidos.arn, aws_dynamodb_table.productos.arn]
-#        },
-#        { # ingredientes: SOLO lectura (orders no es dueño, solo muestra el menú)
-#          Effect   = "Allow"
-#          Action   = ["dynamodb:GetItem","dynamodb:Query","dynamodb:Scan"]
-#          Resource = [aws_dynamodb_table.ingredientes.arn]
-#        }
-#      ]
-#    })
-#  }
-#
-#  Repetís el patrón para kitchen (RW ingredientes, R productos) y delivery
-#  (RW repartidores). Después, en ecs.tf, cada task_definition usa su
-#  `task_role_arn = aws_iam_role.<servicio>_task.arn`.
-#  Así cada servicio toca SOLO sus tablas: mínimo privilegio impecable.
+#  Modelo database-per-service ESTRICTO: cada servicio accede SOLO a sus
+#  tablas. El `Resource` de cada política apunta al ARN exacto de la tabla,
+#  así un servicio NO puede tocar la tabla de otro aunque quiera.
+#    orders   → RW pedidos
+#    kitchen  → RW productos + RW ingredientes
+#    delivery → RW repartidores
+#  Los 3 roles usan la MISMA política de confianza (ecs_tasks_assume): solo
+#  las tareas de ECS pueden "ponerse" este carnet.
 # =====================================================================
+
+# Acciones de lectura+escritura sobre una tabla DynamoDB. Se define una sola
+# vez acá y se reutiliza en las 3 políticas (no repetir la lista a mano).
+locals {
+  dynamodb_rw_actions = [
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+    "dynamodb:DeleteItem",
+    "dynamodb:Query",
+    "dynamodb:Scan",
+  ]
+}
+
+# --- orders: RW SOLO sobre la tabla de pedidos ---
+resource "aws_iam_role" "orders_task" {
+  name               = "${var.project_name}-orders-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
+resource "aws_iam_role_policy" "orders_dynamo" {
+  name = "${var.project_name}-orders-dynamo"
+  role = aws_iam_role.orders_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = local.dynamodb_rw_actions
+      Resource = [aws_dynamodb_table.pedidos.arn]
+    }]
+  })
+}
+
+# --- kitchen: RW sobre productos e ingredientes (es dueño de ambas) ---
+resource "aws_iam_role" "kitchen_task" {
+  name               = "${var.project_name}-kitchen-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
+resource "aws_iam_role_policy" "kitchen_dynamo" {
+  name = "${var.project_name}-kitchen-dynamo"
+  role = aws_iam_role.kitchen_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = local.dynamodb_rw_actions
+      Resource = [
+        aws_dynamodb_table.productos.arn,
+        aws_dynamodb_table.ingredientes.arn,
+      ]
+    }]
+  })
+}
+
+# --- delivery: RW SOLO sobre la tabla de repartidores ---
+resource "aws_iam_role" "delivery_task" {
+  name               = "${var.project_name}-delivery-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
+resource "aws_iam_role_policy" "delivery_dynamo" {
+  name = "${var.project_name}-delivery-dynamo"
+  role = aws_iam_role.delivery_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = local.dynamodb_rw_actions
+      Resource = [aws_dynamodb_table.repartidores.arn]
+    }]
+  })
+}
