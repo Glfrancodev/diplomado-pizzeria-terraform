@@ -1,0 +1,47 @@
+# =====================================================================
+#  .gitignore — Infraestructura Terraform (Pizzería Online)
+#  Qué NUNCA debe subir a GitHub: credenciales, el state y archivos locales.
+# =====================================================================
+
+# --- State de Terraform: tiene datos sensibles (endpoints, a veces secretos)
+#     y es la "memoria" local. NUNCA va al repo. ---
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+
+# --- Variables: pueden traer credenciales (access_key/secret_key). ---
+#     Si querés versionar valores NO sensibles, usá un example.tfvars a mano.
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# --- Overrides locales de Terraform (config personal de cada uno). ---
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# --- Carpetas y archivos que Terraform genera al hacer init/plan. ---
+#     OJO: .terraform.lock.hcl SÍ se sube al repo (es el lock de versiones del
+#     provider, como package-lock.json). Por eso NO está en esta lista.
+.terraform/
+*.tfplan
+.terraformrc
+terraform.rc
+
+# --- Credenciales de AWS (por las dudas: nunca deberían vivir en el repo). ---
+.aws/
+credentials
+
+# --- Basura del sistema operativo / editores. ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- Contexto local de Claude Code (no lo subimos al repo). ---
+CLAUDE.md
+.claude/
