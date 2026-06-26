@@ -42,13 +42,18 @@ output "service_discovery_namespace" {
   value       = aws_service_discovery_private_dns_namespace.main.name
 }
 
-# --- Endpoint de Redis ---
-# ❌ ELIMINAR. Con DynamoDB no hay endpoint. En su lugar podés exponer los
-#    nombres de las tablas, p. ej.:
-#    output "tabla_pedidos" { value = aws_dynamodb_table.pedidos.name }
-output "redis_endpoint" {
-  description = "Host:puerto del nodo ElastiCache Redis."
-  value       = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:${aws_elasticache_cluster.redis.cache_nodes[0].port}"
+# --- Nombres de las tablas DynamoDB ---
+# Reemplazan al viejo output de Redis. Con DynamoDB no hay "endpoint": lo útil
+# es ver los nombres reales de las tablas (con el prefijo del proyecto), que es
+# lo que tu código recibe por env var.
+output "dynamodb_tables" {
+  description = "Nombres de las 4 tablas DynamoDB."
+  value = {
+    pedidos      = aws_dynamodb_table.pedidos.name
+    productos    = aws_dynamodb_table.productos.name
+    ingredientes = aws_dynamodb_table.ingredientes.name
+    repartidores = aws_dynamodb_table.repartidores.name
+  }
 }
 
 # 🔧 AGREGAR (lo pide el PDF) cuando tengas el frontend:

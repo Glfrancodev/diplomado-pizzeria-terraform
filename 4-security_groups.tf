@@ -127,23 +127,7 @@ resource "aws_vpc_security_group_ingress_rule" "nats_from_notifications" {
   #    NATS debe aceptar a los 3: orders, kitchen y delivery.
 }
 
-# --- SG de Redis (ElastiCache) ---
-# ❌ ELIMINAR TODO ESTO. DynamoDB NO vive en la VPC y NO usa Security Group:
-#    se protege con IAM (permisos), no con firewall de red. Este es el gran
-#    cambio de modelo al pasar de ElastiCache a DynamoDB.
-resource "aws_security_group" "redis" {
-  name        = "${var.project_name}-redis-sg"
-  description = "ElastiCache Redis: ingreso solo desde orders"
-  vpc_id      = aws_vpc.main.id
-
-  tags = { Name = "${var.project_name}-redis-sg" }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "redis_from_orders" {
-  security_group_id            = aws_security_group.redis.id
-  referenced_security_group_id = aws_security_group.orders.id
-  ip_protocol                  = "tcp"
-  from_port                    = 6379 # puerto de Redis
-  to_port                      = 6379
-  description                  = "Redis desde orders"
-}
+# NOTA: aquí estaban el SG de Redis y su regla de ingreso (puerto 6379).
+# Se eliminaron al migrar a DynamoDB: DynamoDB NO vive dentro de la VPC y NO
+# usa Security Group (firewall de red); se protege con IAM (permisos). Este es
+# el gran cambio de modelo al pasar de ElastiCache a DynamoDB.

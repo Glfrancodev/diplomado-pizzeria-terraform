@@ -91,10 +91,5 @@ variable "image_tag" {
   default     = "latest" # ✅ DEJAR para la clase. En prod se usa el commit/sha.
 }
 
-variable "redis_node_type" {
-  description = "Tipo de nodo ElastiCache para Redis."
-  type        = string
-  default     = "cache.t3.micro"
-  # ❌ ELIMINAR: vos usás DynamoDB, no Redis. Esta variable y elasticache.tf
-  #    desaparecen. DynamoDB no necesita "tipo de nodo" (es serverless).
-}
+# NOTA: la variable redis_node_type se eliminó al migrar de ElastiCache a
+# DynamoDB. DynamoDB es serverless: no tiene "tipo de nodo" que configurar.

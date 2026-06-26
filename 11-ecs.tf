@@ -36,10 +36,9 @@ locals {
   # URL interna de NATS, vía Cloud Map (nombre, NO IP). 🔧 esto se queda igual.
   nats_dns_url = "nats://nats.${aws_service_discovery_private_dns_namespace.main.name}:4222"
 
-  # URL de Redis. ❌ ELIMINAR: con DynamoDB no hay "URL de base de datos".
-  #   DynamoDB se alcanza por el SDK de AWS usando la región + IAM; tu código
-  #   no necesita una URL, solo los nombres de tabla y permisos.
-  redis_url = "redis://${aws_elasticache_cluster.redis.cache_nodes[0].address}:${aws_elasticache_cluster.redis.cache_nodes[0].port}"
+  # NOTA: el local redis_url se eliminó. Con DynamoDB no hay "URL de base de
+  # datos": tu código la alcanza con el SDK de AWS usando región + IAM, y solo
+  # necesita los NOMBRES de tabla (que pasamos como env vars más abajo).
 }
 
 # --- 2) Task definition de NATS (el broker) ---
@@ -92,14 +91,12 @@ resource "aws_ecs_task_definition" "orders" {
     ]
     # Variables de entorno que recibe tu app NestJS:
     environment = [
-      { name = "NATS_URL", value = local.nats_dns_url },   # ✅ se queda
-      { name = "REDIS_URL", value = local.redis_url },     # ❌ ELIMINAR
-      { name = "ORDERS_HTTP_PORT", value = "3000" }
-      # 🔧 AGREGAR para DynamoDB, por ejemplo:
-      # { name = "AWS_REGION", value = var.aws_region },
-      # { name = "TABLE_PEDIDOS",      value = aws_dynamodb_table.pedidos.name },
-      # { name = "TABLE_PRODUCTOS",    value = aws_dynamodb_table.productos.name },
-      # { name = "TABLE_INGREDIENTES", value = aws_dynamodb_table.ingredientes.name }
+      { name = "NATS_URL", value = local.nats_dns_url }, # ✅ se queda
+      { name = "ORDERS_HTTP_PORT", value = "3000" },
+      # DynamoDB: orders es dueño SOLO de pedidos. La región la necesita el SDK
+      # de AWS; el nombre de la tabla llega por env var (no se hardcodea).
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "TABLE_PEDIDOS", value = aws_dynamodb_table.pedidos.name }
     ]
     logConfiguration = {
       logDriver = "awslogs"
