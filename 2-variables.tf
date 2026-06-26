@@ -35,8 +35,8 @@ variable "secret_key" {
 variable "project_name" {
   description = "Prefijo para nombrar todos los recursos."
   type        = string
-  default     = "test-nest" # 🔧 CAMBIAR a "pizzeria" (o como llamen al grupo).
-  #                            Todos los recursos se llamarán pizzeria-vpc, etc.
+  default     = "pizzeria" # Todos los recursos se llaman pizzeria-* (pizzeria-vpc,
+  #                           pizzeria-cluster, pizzeria-pedidos, etc.)
 }
 
 variable "vpc_cidr" {
